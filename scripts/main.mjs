@@ -8,6 +8,7 @@ import { LEQUIN_PROFILE } from "./profiles/lequin.mjs";
 import { SAPPHIRE_PROFILE } from "./profiles/sapphire.mjs";
 import { XINGHAI_PROFILE } from "./profiles/xinghai.mjs";
 import { YINAI_PROFILE } from "./profiles/yinai.mjs";
+import { UNIVERSAL_EFFECTS } from "./universal/registry.mjs";
 
 const MODULE_ID = "player-custom-cinematic-effects";
 const MODULE_TITLE = "玩家定制特效库";
@@ -41,6 +42,19 @@ const EFFECT_TEMPLATE_LABELS = {
 const SUSTAINED_DURATION_TYPES = new Set(["sustained", "persistent"]);
 const SHARED_CONSUMABLE_SEQUENCES = new Set(["rationUse", "brewUse"]);
 const FOOD_OR_POTION_PATTERN = /ration|water|pint|beer|ale|wine|tea|stew|soup|pie|pumpkin|berry|goodberry|food|drink|meal|potion|口粮|水袋|品脱|啤酒|麦酒|红酒|冰茶|杂烩|汤|芝士|青蔬派|南瓜|神莓|饮食|食物|饮料|药水/u;
+const UNIVERSAL_PROFILE = {
+  id: "universal",
+  displayName: "通用电影级特效",
+  theme: "基础特效库",
+  concept: "不绑定角色的通用电影级特效层。"
+};
+const EFFECT_MODE_LABELS = {
+  auto: "自动",
+  custom: "定制",
+  universal: "通用",
+  off: "关闭"
+};
+const EFFECT_MODE_VALUES = new Set(Object.keys(EFFECT_MODE_LABELS));
 
 const QUALITY = {
   cinematic: {
@@ -1298,6 +1312,7 @@ let panelElement = null;
 let panelTimer = null;
 let recentEvents = [];
 let preparedProfiles = new Map();
+let preparedUniversalEffects = [];
 let duplicateEvents = new Map();
 let externalSyncStamps = new Map();
 
@@ -1309,6 +1324,7 @@ Hooks.once("ready", async () => {
   await runMigrations();
 
   for (const profile of BUILTIN_PROFILES) registerProfile(profile);
+  registerUniversalEffects(UNIVERSAL_EFFECTS);
   validateProfileIsolation(BUILTIN_PROFILES);
 
   const module = game.modules.get(MODULE_ID);
@@ -1343,6 +1359,14 @@ Hooks.on("createChatMessage", (message) => {
   window.setTimeout(() => handleChatMessage(message), 120);
 });
 
+Hooks.on("renderActorSheet", (app, html) => {
+  window.setTimeout(() => addActorSheetEffectMarkers(app, html), 0);
+});
+
+Hooks.on("renderActorSheetV2", (app, html) => {
+  window.setTimeout(() => addActorSheetEffectMarkers(app, html), 0);
+});
+
 const api = {
   openPanel,
   closePanel,
@@ -1350,6 +1374,7 @@ const api = {
   refreshPanel,
   scanActor,
   playItemEffect,
+  playEffectStage,
   previewItem,
   createOpenPanelMacro,
   registerProfile,
@@ -1357,6 +1382,7 @@ const api = {
   clearActorProfileAssignment,
   getActorProfile,
   getActorEffect,
+  getUniversalEffects: () => preparedUniversalEffects.map(cloneEffectSummary),
   validateProfileIsolation: () => validateProfileIsolation(BUILTIN_PROFILES),
   getProfiles: () => Array.from(preparedProfiles.values()).map(cloneProfileSummary),
   getRecentEvents: () => foundry.utils.deepClone(recentEvents)
@@ -1442,6 +1468,20 @@ function registerSettings() {
     config: false,
     type: String,
     default: "cinematic"
+  });
+
+  game.settings.register(MODULE_ID, "effectModeOverrides", {
+    scope: "world",
+    config: false,
+    type: Object,
+    default: {}
+  });
+
+  game.settings.register(MODULE_ID, "personalEffectModeOverrides", {
+    scope: "client",
+    config: false,
+    type: Object,
+    default: {}
   });
 
   game.settings.register(MODULE_ID, "enableCameraPan", {
@@ -1592,6 +1632,18 @@ function registerProfile(profile, options = {}) {
   preparedProfiles.set(prepared.id, prepared);
   refreshPanel({ rerender: true, preserveScroll: true });
   return prepared;
+}
+
+function registerUniversalEffects(effects = []) {
+  preparedUniversalEffects = effects.map((effect) => ({
+    ...prepareEffect(UNIVERSAL_PROFILE, effect),
+    sourceType: "universal"
+  }));
+  debugLog("通用电影级特效库已注册", {
+    count: preparedUniversalEffects.length,
+    cantrips: preparedUniversalEffects.filter((effect) => effect.universal?.family === "cantrip").length
+  });
+  return preparedUniversalEffects;
 }
 
 function validateProfileIsolation(sourceProfiles = []) {
@@ -1834,7 +1886,10 @@ function cloneEffectSummary(effect) {
     requiresTarget: Boolean(effect.requiresTarget),
     selfTarget: Boolean(effect.selfTarget),
     itemIds: Array.from(effect.itemIds ?? []),
-    itemNames: Array.from(effect.itemNames ?? [])
+    itemNames: Array.from(effect.itemNames ?? []),
+    sourceType: effect.sourceType ?? "",
+    rulesReference: effect.rulesReference ? foundry.utils.deepClone(effect.rulesReference) : null,
+    universal: effect.universal ? foundry.utils.deepClone(effect.universal) : null
   };
 }
 
@@ -1844,11 +1899,14 @@ function getActorProfile(actor) {
 }
 
 function getActorEffect(actor, item) {
-  const profile = findProfileForActor(actor);
-  const effect = profile ? findEffectForItem(profile, item) : null;
+  const resolution = resolveItemEffect(actor, item);
   return {
-    profile: profile ? cloneProfileSummary(profile) : null,
-    effect: effect ? cloneEffectSummary(effect) : null
+    profile: resolution.profile ? cloneProfileSummary(resolution.profile) : null,
+    effect: resolution.effect ? cloneEffectSummary(resolution.effect) : null,
+    customEffect: resolution.customEffect ? cloneEffectSummary(resolution.customEffect) : null,
+    universalEffect: resolution.universalEffect ? cloneEffectSummary(resolution.universalEffect) : null,
+    mode: resolution.mode,
+    source: resolution.source
   };
 }
 
@@ -1860,8 +1918,8 @@ async function handleMidiRollComplete(workflow) {
   if (!actor || !item) return;
   if (!shouldHandleAutoplay(actor)) return;
 
-  const profile = findProfileForActor(actor);
-  const effect = profile ? findEffectForItem(profile, item) : null;
+  const resolution = resolveItemEffect(actor, item);
+  const effect = resolution.effect;
   if (effectUsesMeasuredTemplate(effect)) return;
 
   const key = eventKey(actor, item, workflow?.activity);
@@ -1883,8 +1941,8 @@ async function handleDnd5ePostUseActivity(activity, usageConfig, results) {
 
   const activityType = String(activity?.type ?? "");
   const midiActive = Boolean(game.modules.get("midi-qol")?.active);
-  const profile = findProfileForActor(actor);
-  const effect = profile ? findEffectForItem(profile, item) : null;
+  const resolution = resolveItemEffect(actor, item);
+  const effect = resolution.effect;
   const templateAware = effectUsesMeasuredTemplate(effect);
   if (midiActive && !templateAware && !["utility", "cast", "enchant", "summon", "forward"].includes(activityType)) return;
 
@@ -1922,10 +1980,16 @@ async function playItemEffect(context = {}) {
   const item = context.item;
   if (!actor || !item) return false;
 
-  const profile = findProfileForActor(actor);
-  const effect = profile ? findEffectForItem(profile, item) : null;
-  if (!profile || !effect) {
-    debugLog("未找到匹配的角色特效配置", { actor: actor.name, item: item.name });
+  const resolution = resolveItemEffect(actor, item, context);
+  const { profile, effect, source: effectSource } = resolution;
+  if (!effect) {
+    debugLog("未找到匹配的电影级特效配置", {
+      actor: actor.name,
+      item: item.name,
+      mode: resolution.mode,
+      custom: Boolean(resolution.customEffect),
+      universal: Boolean(resolution.universalEffect)
+    });
     return false;
   }
 
@@ -1934,6 +1998,7 @@ async function playItemEffect(context = {}) {
       actor: actor.name,
       item: item.name,
       effect: effect.label,
+      source: effectSource,
       trigger: context.trigger
     });
     return false;
@@ -1957,6 +2022,7 @@ async function playItemEffect(context = {}) {
       actor: actor.name,
       item: item.name,
       effect: effect.label,
+      source: effectSource,
       guard: externalAnimationGuard(effect, item)
     });
     if (context.manual) notify("warn", effectBlockedMessage(effect, item));
@@ -1975,12 +2041,31 @@ async function playItemEffect(context = {}) {
   if (!ensureReady(context.manual || context.ignoreRules ? "manual" : "auto")) return false;
 
   try {
-    return await player({ profile, effect, ...resolved, trigger: context.trigger ?? "manual" });
+    const playbackProfile = effectSource === "universal" ? UNIVERSAL_PROFILE : profile;
+    return await player({
+      profile: playbackProfile,
+      actorProfile: profile,
+      effect,
+      effectSource,
+      effectMode: resolution.mode,
+      customEffect: resolution.customEffect,
+      universalEffect: resolution.universalEffect,
+      ...resolved,
+      trigger: context.trigger ?? "manual"
+    });
   } catch (error) {
     console.error(`${MODULE_TITLE} | 播放 ${effect.label} 失败`, error);
     notify("error", `${effect.label} 播放失败，详情请查看控制台。`);
     return false;
   }
+}
+
+async function playEffectStage(context = {}) {
+  return playItemEffect({
+    ...context,
+    trigger: context.trigger ?? "automation",
+    skipAutomationGuard: true
+  });
 }
 
 function shouldDeferAnimationToAutomation(effect, context = {}) {
@@ -2003,10 +2088,10 @@ async function previewItem(actorId, itemId) {
     return false;
   }
 
-  const profile = findProfileForActor(actor);
-  const effect = profile ? findEffectForItem(profile, item) : null;
+  const resolution = resolveItemEffect(actor, item);
+  const effect = resolution.effect;
   if (!effect) {
-    notify("warn", "这个条目还没有定制特效。");
+    notify("warn", "这个条目还没有可播放的电影级特效。");
     return false;
   }
 
@@ -2047,7 +2132,10 @@ function resolvePlaybackContext(profile, effect, context) {
     usageConfig: context.usageConfig,
     results: context.results,
     message: context.message,
-    charge: context.charge
+    charge: context.charge,
+    stage: context.stage,
+    damage: context.damage,
+    attackRoll: context.attackRoll
   };
 }
 
@@ -2058,12 +2146,64 @@ function resolveManualTargets(effect, source) {
   return [];
 }
 
+function resolveItemEffect(actor, item, context = {}) {
+  const profile = findProfileForActor(actor);
+  const customEffect = profile ? findEffectForItem(profile, item) : null;
+  const universalEffect = findUniversalEffectForItem(item);
+  const mode = normalizeEffectMode(context.effectMode ?? getItemEffectMode(actor, item));
+  let effect = null;
+  let source = "";
+
+  if (mode === "custom") {
+    effect = customEffect;
+    source = effect ? "custom" : "";
+  } else if (mode === "universal") {
+    effect = universalEffect;
+    source = effect ? "universal" : "";
+  } else if (mode !== "off") {
+    effect = customEffect ?? universalEffect;
+    source = customEffect ? "custom" : universalEffect ? "universal" : "";
+  }
+
+  return {
+    actor,
+    item,
+    profile,
+    customEffect,
+    universalEffect,
+    effect,
+    mode,
+    source,
+    hasAny: Boolean(customEffect || universalEffect)
+  };
+}
+
+function findUniversalEffectForItem(item) {
+  if (!item) return null;
+  const normalizedNames = normalizedItemNames(item);
+  return preparedUniversalEffects.find((effect) => universalEffectMatchesItem(effect, item, normalizedNames)) ?? null;
+}
+
+function universalEffectMatchesItem(effect, item, normalizedNames) {
+  if (effect.universal?.family === "cantrip" && !isCantripItem(item)) return false;
+  return effectMatchesNormalizedNames(effect, normalizedNames);
+}
+
+function isCantripItem(item) {
+  return item?.type === "spell" && Number(item.system?.level ?? 0) === 0;
+}
+
+function normalizeEffectMode(value) {
+  const mode = String(value ?? "auto");
+  return EFFECT_MODE_VALUES.has(mode) ? mode : "auto";
+}
+
 function scanActor(actor) {
   if (!actor) return { actor: null, profile: null, rows: [], summary: emptySummary() };
   const profile = findProfileForActor(actor);
   const items = Array.from(actor.items ?? [])
     .filter((item) => ACTIONABLE_TYPES.has(item.type))
-    .filter((item) => item.type !== "consumable" || findEffectForItem(profile, item))
+    .filter((item) => item.type !== "consumable" || resolveItemEffect(actor, item).hasAny)
     .sort(sortActionableItems);
 
   const rows = items.map((item) => rowForItem(actor, profile, item));
@@ -2076,13 +2216,24 @@ function scanActor(actor) {
 }
 
 function rowForItem(actor, profile, item) {
-  const effect = profile ? findEffectForItem(profile, item) : null;
+  const resolution = resolveItemEffect(actor, item);
+  const effect = resolution.effect;
   const crp = crpStatus(item);
   const autoanimations = autoAnimationStatus(item);
   const configuredEnabled = effect ? isEffectConfiguredEnabled(effect, item) : false;
-  const playable = effect ? isEffectPlayable(profile, effect, item) : false;
+  const playable = effect ? isEffectPlayable(resolution.profile, effect, item) : false;
   const override = effect ? getEffectOverride(effect.key) : null;
   const guard = effect ? externalAnimationGuard(effect, item) : { guarded: false };
+  const statusLabel = resolution.mode === "off"
+    ? "已关闭"
+    : effect
+      ? effectStatusLabel(effect, configuredEnabled, playable, guard)
+      : resolution.hasAny ? "需切换" : "未配置";
+  const statusClass = resolution.mode === "off"
+    ? "disabled"
+    : effect
+      ? effectStatusClass(effect, configuredEnabled, playable, guard)
+      : "not-configured";
   return {
     actorId: actor.id,
     itemId: item.id,
@@ -2093,14 +2244,19 @@ function rowForItem(actor, profile, item) {
     crp,
     autoanimations,
     effect,
+    customEffect: resolution.customEffect,
+    universalEffect: resolution.universalEffect,
+    effectSource: resolution.source,
+    effectMode: resolution.mode,
+    hasAnyEffect: resolution.hasAny,
     configured: Boolean(effect),
     configuredEnabled,
     playable,
     enabled: configuredEnabled,
     override,
     guard,
-    statusLabel: effectStatusLabel(effect, configuredEnabled, playable, guard),
-    statusClass: effectStatusClass(effect, configuredEnabled, playable, guard)
+    statusLabel,
+    statusClass
   };
 }
 
@@ -2123,12 +2279,18 @@ function summarizeRows(rows) {
   const crpAnimation = rows.filter((row) => row.crp.hasAnimation).length;
   const crpAny = rows.filter((row) => row.crp.present).length;
   const aaActive = rows.filter((row) => row.autoanimations.active).length;
+  const custom = rows.filter((row) => row.effectSource === "custom").length;
+  const universal = rows.filter((row) => row.effectSource === "universal").length;
+  const off = rows.filter((row) => row.effectMode === "off").length;
   return {
     total: rows.length,
     configured,
     enabled,
     playable,
     sustained,
+    custom,
+    universal,
+    off,
     crpAny,
     crpAnimation,
     aaActive,
@@ -2143,6 +2305,9 @@ function emptySummary() {
     enabled: 0,
     playable: 0,
     sustained: 0,
+    custom: 0,
+    universal: 0,
+    off: 0,
     crpAny: 0,
     crpAnimation: 0,
     aaActive: 0,
@@ -2232,10 +2397,10 @@ function renderPanel() {
     </section>
     <section class="pcce-summary${compactClass}">
       ${summaryCard("总条目", scan.summary.total)}
-      ${summaryCard("已配置", scan.summary.configured)}
-      ${summaryCard("已启用", scan.summary.enabled)}
+      ${summaryCard("定制", scan.summary.custom)}
+      ${summaryCard("通用", scan.summary.universal)}
+      ${summaryCard("关闭", scan.summary.off)}
       ${summaryCard("可自动", scan.summary.playable)}
-      ${summaryCard("持续", scan.summary.sustained)}
       ${summaryCard("AA动画", scan.summary.aaActive)}
       ${summaryCard("CRP动画", scan.summary.crpAnimation)}
     </section>
@@ -2287,14 +2452,15 @@ function renderRow(row) {
   const type = itemTypeLabel(row);
   const crp = row.crp.label;
   const aa = row.autoanimations;
-  const effectName = row.effect?.label ?? "未配置";
-  const tier = row.effect ? `Lv.${row.effect.tier ?? 1}` : "";
-  const notes = row.effect?.notes ?? "这个条目还没有定制特效。";
+  const effectName = row.effect?.label ?? (row.hasAnyEffect ? "当前模式无特效" : "未配置");
+  const notes = row.effect?.notes ?? (row.hasAnyEffect ? "切换模式以启用可用电影级特效。" : "这个条目还没有电影级特效。");
   const previewDisabled = row.effect ? "" : "disabled";
-  const toggleDisabled = row.effect ? "" : "disabled";
+  const toggleDisabled = row.hasAnyEffect ? "" : "disabled";
   const action = rowEffectAction(row);
   const floatingText = row.effect ? effectFloatingText(row.effect, row.effect.floatingText ?? row.effect.label) : "";
   const metadataBadges = row.effect ? renderEffectMetadataBadges(row.effect) : "";
+  const sourceBadge = renderEffectSourceBadge(row);
+  const modeSelect = row.hasAnyEffect ? renderEffectModeSelect(row) : "";
   const textInput = row.effect ? `
     <label class="pcce-row-text">
       <span>浮字</span>
@@ -2306,14 +2472,16 @@ function renderRow(row) {
     <article class="pcce-row ${row.statusClass}" title="${escapeAttribute(notes)}">
       <div class="pcce-row-main">
         <strong>${escapeHTML(row.name)}</strong>
-        <span>${escapeHTML(type)} · ${escapeHTML(effectName)} ${escapeHTML(tier)}</span>
+        <span>${escapeHTML(type)} · ${escapeHTML(effectName)}</span>
       </div>
       <div class="pcce-badges">
+        ${sourceBadge}
         ${metadataBadges}
         <span class="pcce-badge crp-${row.crp.level}">${escapeHTML(crp)}</span>
         <span class="pcce-badge aa-${aa.level}" title="${escapeAttribute(aa.hint)}">${escapeHTML(aa.label)}</span>
         <span class="pcce-badge ${row.statusClass}">${escapeHTML(row.statusLabel)}</span>
       </div>
+      ${modeSelect}
       <div class="pcce-row-actions">
         <button type="button" data-action="preview" data-actor-id="${escapeAttribute(row.actorId)}" data-item-id="${escapeAttribute(row.itemId)}" ${previewDisabled} title="预览"><i class="fas fa-play"></i></button>
         <button type="button" class="pcce-effect-action pcce-action-${action.kind}" data-action="toggle-effect" data-actor-id="${escapeAttribute(row.actorId)}" data-item-id="${escapeAttribute(row.itemId)}" ${toggleDisabled} title="${escapeAttribute(action.title)}" aria-label="${escapeAttribute(action.title)}">
@@ -2322,6 +2490,32 @@ function renderRow(row) {
       </div>
       ${textInput}
     </article>
+  `;
+}
+
+function renderEffectSourceBadge(row) {
+  if (row.effectMode === "off") return `<span class="pcce-badge pcce-source-off">关闭</span>`;
+  if (row.effectSource === "custom") return `<span class="pcce-badge pcce-source-custom">定制</span>`;
+  if (row.effectSource === "universal") return `<span class="pcce-badge pcce-source-universal">通用</span>`;
+  return "";
+}
+
+function renderEffectModeSelect(row) {
+  const options = [
+    ["auto", "自动", true],
+    ["custom", "定制", Boolean(row.customEffect)],
+    ["universal", "通用", Boolean(row.universalEffect)],
+    ["off", "关闭", true]
+  ];
+  return `
+    <label class="pcce-row-mode">
+      <span>模式</span>
+      <select data-effect-mode="true" data-actor-id="${escapeAttribute(row.actorId)}" data-item-id="${escapeAttribute(row.itemId)}">
+        ${options.map(([value, label, enabled]) => `
+          <option value="${value}" ${row.effectMode === value ? "selected" : ""} ${enabled ? "" : "disabled"}>${label}</option>
+        `).join("")}
+      </select>
+    </label>
   `;
 }
 
@@ -2335,11 +2529,17 @@ function renderEffectMetadataBadges(effect) {
 }
 
 function rowEffectAction(row) {
+  if (!row.hasAnyEffect) {
+    return { kind: "none", label: "--", title: "这个条目还没有电影级特效。" };
+  }
+  if (row.effectMode === "off") {
+    return { kind: "enable", label: "开", title: "恢复这个条目的电影级特效。" };
+  }
   if (!row.effect) {
-    return { kind: "none", label: "--", title: "这个条目还没有定制特效。" };
+    return { kind: "none", label: "--", title: "当前模式没有可用特效，请切换模式。" };
   }
   if (!row.configuredEnabled) {
-    return { kind: "enable", label: "启", title: "启用这个定制特效。" };
+    return { kind: "enable", label: "启", title: "启用这个电影级特效。" };
   }
   if (row.guard?.type === "aa") {
     return { kind: "aa", label: "AA", title: "关闭这个条目的 AA 动画，并使用本特效库。" };
@@ -2347,7 +2547,7 @@ function rowEffectAction(row) {
   if (row.guard?.type === "crp") {
     return { kind: "crp", label: "CRP", title: "关闭这个条目的 CRP 动画，并使用本特效库。" };
   }
-  return { kind: "disable", label: "停", title: "停用这个定制特效。" };
+  return { kind: "disable", label: "关", title: "关闭这个条目的电影级特效。" };
 }
 
 function renderRecent(event) {
@@ -2366,6 +2566,41 @@ function renderEmptyActor() {
       <span>选择一个角色，或在场景中选中对应 Token。</span>
     </div>
   `;
+}
+
+function addActorSheetEffectMarkers(app, html) {
+  const actor = app?.actor ?? app?.document;
+  if (!actor?.items) return;
+  const root = html?.[0] ?? html;
+  if (!root?.querySelectorAll) return;
+
+  for (const item of actor.items) {
+    if (!ACTIONABLE_TYPES.has(item.type)) continue;
+    const resolution = resolveItemEffect(actor, item);
+    if (!resolution.hasAny) continue;
+    const row = root.querySelector(`[data-item-id="${escapeCssIdentifier(item.id)}"]`);
+    if (!row || row.querySelector(".pcce-sheet-marker")) continue;
+    const marker = document.createElement("span");
+    marker.className = `pcce-sheet-marker pcce-sheet-${resolution.source || resolution.mode}`;
+    marker.title = actorSheetMarkerTitle(resolution);
+    marker.textContent = actorSheetMarkerText(resolution);
+    const title = row.querySelector(".item-name, .name, h4, .item-title") ?? row;
+    title.append(marker);
+  }
+}
+
+function actorSheetMarkerText(resolution) {
+  if (resolution.mode === "off") return "影:关";
+  if (resolution.source === "custom") return "影:定";
+  if (resolution.source === "universal") return "影:通";
+  return "影";
+}
+
+function actorSheetMarkerTitle(resolution) {
+  if (resolution.mode === "off") return "本条目电影级特效已关闭";
+  if (resolution.source === "custom") return `定制电影级特效：${resolution.effect?.label ?? ""}`;
+  if (resolution.source === "universal") return `通用电影级特效：${resolution.effect?.label ?? ""}`;
+  return "存在可用电影级特效";
 }
 
 function statusPill(label, ok) {
@@ -2415,6 +2650,12 @@ function bindPanelEvents(element) {
 
   element.addEventListener("change", async (event) => {
     const input = event.target;
+    if (input?.dataset?.effectMode) {
+      await setItemEffectMode(input.dataset.actorId, input.dataset.itemId, input.value);
+      refreshPanel({ rerender: true, preserveScroll: true });
+      return;
+    }
+
     if (input?.dataset?.floatingText) {
       await setItemFloatingText(input.dataset.actorId, input.dataset.itemId, input.value);
       refreshPanel({ rerender: true, preserveScroll: true });
@@ -2509,24 +2750,43 @@ async function toggleItemEffect(actorId, itemId) {
   try {
     const actor = game.actors?.get(actorId);
     const item = actor?.items?.get(itemId);
-    const profile = actor ? findProfileForActor(actor) : null;
-    const effect = profile && item ? findEffectForItem(profile, item) : null;
+    const resolution = actor && item ? resolveItemEffect(actor, item) : {};
+    const effect = resolution.effect;
     if (!actor || !item) {
       notify("warn", "没有找到要修改的角色或条目，请重新选择角色。");
       return false;
     }
-    if (!effect) {
-      notify("warn", `${item.name} 还没有定制特效配置，暂时不能启用。`);
+    if (!resolution.hasAny) {
+      notify("warn", `${item.name} 还没有电影级特效配置，暂时不能启用。`);
       return false;
     }
     if (!canControlActor(actor)) {
       notify("warn", "你没有权限修改这个角色的定制特效。");
       return false;
     }
+    if (resolution.mode === "off") {
+      await writeItemEffectMode(actor, item, "auto");
+      const nextResolution = resolveItemEffect(actor, item, { effectMode: "auto" });
+      if (nextResolution.effect) await syncExternalAnimationToggles(item, true, nextResolution.effect);
+      notify("info", `${item.name} 已恢复电影级特效。`);
+      return true;
+    }
+    if (!effect) {
+      notify("warn", `${item.name} 当前模式没有可用特效，请切换到自动或通用模式。`);
+      return false;
+    }
 
     const enabledNow = isEffectConfiguredEnabled(effect, item);
     const guard = externalAnimationGuard(effect, item);
     const next = !enabledNow || Boolean(enabledNow && guard.guarded);
+    if (enabledNow && !guard.guarded) {
+      await writeItemEffectMode(actor, item, "off");
+      await syncExternalAnimationToggles(item, false, effect);
+      await endPersistentEffectsForItem(effect, item);
+      notify("info", `${item.name} 已关闭本特效库演出。`);
+      return true;
+    }
+
     const settingKey = editableOverrideSettingKey();
     const overrides = cloneObject(setting(settingKey) ?? {});
     overrides[effect.key] = {
@@ -2547,11 +2807,34 @@ async function toggleItemEffect(actorId, itemId) {
   }
 }
 
+async function setItemEffectMode(actorId, itemId, mode) {
+  const actor = game.actors?.get(actorId);
+  const item = actor?.items?.get(itemId);
+  if (!actor || !item) return false;
+  if (!canControlActor(actor)) {
+    notify("warn", "你没有权限修改这个角色的特效模式。");
+    return false;
+  }
+
+  const nextMode = normalizeEffectMode(mode);
+  const before = resolveItemEffect(actor, item);
+  await writeItemEffectMode(actor, item, nextMode);
+  const after = resolveItemEffect(actor, item, { effectMode: nextMode });
+  if (nextMode === "off") {
+    if (before.effect) await endPersistentEffectsForItem(before.effect, item);
+    await syncExternalAnimationToggles(item, false, before.effect);
+  } else if (after.effect) {
+    await syncExternalAnimationToggles(item, true, after.effect);
+  }
+  notify("info", `${item.name} 已切换为${EFFECT_MODE_LABELS[nextMode]}模式。`);
+  return true;
+}
+
 async function setItemFloatingText(actorId, itemId, value) {
   const actor = game.actors?.get(actorId);
   const item = actor?.items?.get(itemId);
-  const profile = actor ? findProfileForActor(actor) : null;
-  const effect = profile && item ? findEffectForItem(profile, item) : null;
+  const resolution = actor && item ? resolveItemEffect(actor, item) : {};
+  const effect = resolution.effect;
   if (!effect) return;
   if (!canControlActor(actor)) {
     notify("warn", "你没有权限修改这个角色的定制浮字。");
@@ -2623,12 +2906,12 @@ async function syncExternalAnimationToggles(item, customEnabled, effect = null) 
   const crp = crpStatus(item);
 
   if (customEnabled) {
-    if (game.modules.get("autoanimations")?.active && aa.level !== "disabled") {
+    if (game.modules.get("autoanimations")?.active && aa.level !== "disabled" && !effect?.ignoreAaGuard) {
       updateData["flags.autoanimations.killAnim"] = true;
       updateData["flags.autoanimations.isEnabled"] = false;
       updateData[`${moduleFlagBase}.aaDisabledByLibrary`] = true;
     }
-    if (crp.hasAnimation && effect?.crpMode !== "overlay-safe") {
+    if (crp.hasAnimation && !effect?.ignoreCrpGuard) {
       updateData["flags.chris-premades.config.playAnimation"] = false;
       updateData[`${moduleFlagBase}.crpAnimationDisabledByLibrary`] = true;
     }
@@ -2651,8 +2934,8 @@ async function ensureExternalAnimationsMuted(effect, item) {
   if (!item?.update || !effect) return;
   const aa = autoAnimationStatus(item);
   const crp = crpStatus(item);
-  const shouldMuteAa = game.modules.get("autoanimations")?.active && aa.active;
-  const shouldMuteCrp = crp.hasAnimation && effect.crpMode !== "overlay-safe";
+  const shouldMuteAa = game.modules.get("autoanimations")?.active && aa.active && !effect.ignoreAaGuard;
+  const shouldMuteCrp = crp.hasAnimation && !effect.ignoreCrpGuard;
   if (!shouldMuteAa && !shouldMuteCrp) return;
 
   const key = `${item.uuid ?? item.id ?? item.name}|${effect.key}`;
@@ -2799,6 +3082,7 @@ function isFoodOrPotionReusableEffect(effect, item = null) {
 
 const SEQUENCE_PLAYERS = {
   ...SIGNATURE_SEQUENCE_PLAYERS,
+  universalCantrip: playUniversalCantrip,
   grimManyHandsUnarmed: playGrimManyHandsUnarmed,
   grimManyHandsDagger: playGrimManyHandsDagger,
   guidingBolt: playGuidingBolt,
@@ -2894,6 +3178,267 @@ const SEQUENCE_PLAYERS = {
   lawrenceActionSurge: playLawrenceActionSurge,
   lawrenceUtility: playLawrenceUtility
 };
+
+async function playUniversalCantrip(ctx) {
+  const seq = makeSequence();
+  const { source, targets, quality, effect, item } = ctx;
+  const targetList = uniqueTokens((targets?.length ? targets : [source]).filter(Boolean));
+  const theme = String(effect?.universal?.theme ?? "arcane");
+  const motion = String(effect?.universal?.motion ?? (effect?.requiresTarget ? "projectile" : "pulse"));
+  const sound = universalCantripSound(theme);
+  const cast = universalCantripCast(theme);
+  const impact = universalCantripImpact(theme);
+  const loop = universalCantripLoop(theme);
+  const floating = effect?.universal?.floatingText ?? effect?.label ?? item?.name ?? "通用戏法";
+
+  await cleanupInstantLegacyLoops(effect, item);
+  if (shouldPersistEffect(ctx)) {
+    await resetPersistentEffects(ctx, uniqueTokens([source, ...targetList].filter(Boolean)), ["universal-loop", "universal-mark"]);
+  }
+
+  addSound(seq, sound, { volume: 0.28 });
+  addCameraPan(seq, targetList[0] ?? source, quality, { duration: 300, scale: 1.05 });
+  addUniversalCantripCast(seq, source, cast, quality, theme);
+
+  if (motion === "melee") {
+    seq.effect()
+      .file(firstExisting(loop))
+      .atLocation(source)
+      .aboveLighting()
+      .scaleToObject(quality.casterScale * 0.72, { considerTokenScale: true, uniform: true })
+      .fadeOut(240)
+      .delay(80);
+  }
+
+  if (motion === "burst") {
+    seq.effect()
+      .file(firstExisting(impact))
+      .atLocation(source)
+      .belowTokens()
+      .scaleToObject(quality.casterScale * 1.02, { considerTokenScale: true, uniform: true })
+      .fadeOut(360)
+      .delay(180);
+  }
+
+  if (effect.requiresTarget) {
+    for (const [index, target] of targetList.entries()) {
+      const delay = index * Math.min(quality.stagger, 120);
+      if (motion === "melee") {
+        addTokenAfterimage(seq, source, target, quality, {
+          delay: delay + 30,
+          fraction: 0.14,
+          opacity: 0.24,
+          duration: 360
+        });
+      } else if (motion !== "point-burst") {
+        seq.effect()
+          .file(firstExisting(universalCantripProjectile(theme)))
+          .atLocation(source, { randomOffset: 0.18, gridUnits: true })
+          .stretchTo(target, { randomOffset: 0.12, gridUnits: true })
+          .aboveLighting()
+          .fadeOut(120)
+          .delay(delay + 40);
+      }
+
+      seq.effect()
+        .file(firstExisting(impact))
+        .atLocation(target)
+        .aboveLighting()
+        .scaleToObject(quality.targetScale * 0.56, { considerTokenScale: true, uniform: true })
+        .fadeOut(280)
+        .delay(delay + 250);
+
+      if (quality.extraLayers) {
+        seq.effect()
+          .file(firstExisting(loop))
+          .atLocation(target)
+          .belowTokens()
+          .scaleToObject(quality.targetScale * 0.7, { considerTokenScale: true, uniform: true })
+          .fadeOut(420)
+          .delay(delay + 140);
+      }
+    }
+  } else {
+    seq.effect()
+      .file(firstExisting(loop))
+      .atLocation(source)
+      .belowTokens()
+      .scaleToObject(quality.casterScale * 0.94, { considerTokenScale: true, uniform: true })
+      .fadeOut(460)
+      .delay(140);
+  }
+
+  if (shouldPersistEffect(ctx) && loop.length) {
+    const focus = targetList[0] ?? source;
+    addPersistentAttachedLoop(seq, ctx, focus, loop, {
+      suffix: "universal-loop",
+      scale: effect.requiresTarget ? quality.targetScale * 0.56 : quality.casterScale * 0.52,
+      opacity: 0.54,
+      delay: 900,
+      fadeIn: 220,
+      previewDuration: 2600,
+      pulseDuration: 2200
+    });
+  }
+
+  addFloatingText(seq, targetList[0] ?? source, effectFloatingText(effect, floating), 300);
+  return playAndRecord(seq, ctx, effect.label);
+}
+
+function universalCantripCast(theme) {
+  const map = {
+    acid: ASSETS.xinghaiAcidCast,
+    air: ASSETS.lightFlare,
+    arcane: ASSETS.arcaneWispLoop,
+    cold: ASSETS.graceRayOfFrost,
+    divination: ASSETS.runeDivination,
+    earth: ASSETS.auraStoneLoop,
+    elemental: ASSETS.runeTransmutation,
+    enchantment: ASSETS.graceStars,
+    fire: ASSETS.xinghaiFireCast,
+    force: ASSETS.xinghaiStarCast,
+    healing: ASSETS.healingBurst,
+    illusion: ASSETS.xinghaiIllusion,
+    light: ASSETS.lightOrb,
+    lightning: ASSETS.xinghaiWitchCast,
+    necrotic: ASSETS.runeNecromancy,
+    nature: ASSETS.auraStoneLoop,
+    psychic: ASSETS.xinghaiMindProjectile,
+    radiant: ASSETS.lightFlare,
+    thunder: ASSETS.thunderwave,
+    transmutation: ASSETS.runeTransmutation,
+    ward: ASSETS.shieldLoopArcane,
+    water: ASSETS.xinghaiWaterCast,
+    poison: ASSETS.poisonSplash
+  };
+  return map[theme] ?? ASSETS.arcaneWispLoop;
+}
+
+function universalCantripProjectile(theme) {
+  const map = {
+    acid: ASSETS.xinghaiAcidProjectile,
+    air: ASSETS.lightOrb,
+    arcane: ASSETS.graceMagicMissile,
+    cold: ASSETS.graceRayOfFrost,
+    divination: ASSETS.graceMagicMissile,
+    earth: ASSETS.holyCone,
+    elemental: ASSETS.graceMagicMissile,
+    enchantment: ASSETS.graceStars,
+    fire: ASSETS.xinghaiFireBolt,
+    force: ASSETS.xinghaiStarProjectile,
+    healing: ASSETS.healingBurst,
+    illusion: ASSETS.xinghaiMindProjectile,
+    light: ASSETS.lightOrb,
+    lightning: ASSETS.xinghaiWitchBolt,
+    necrotic: ASSETS.poisonProjectile,
+    nature: ASSETS.poisonProjectile,
+    psychic: ASSETS.xinghaiMindProjectile,
+    radiant: ASSETS.holyLightImpact,
+    thunder: ASSETS.thunderwave,
+    transmutation: ASSETS.xinghaiWaterImpact,
+    ward: ASSETS.holyLightImpact,
+    water: ASSETS.xinghaiWaterProjectile ?? ASSETS.xinghaiWaterImpact,
+    poison: ASSETS.poisonProjectile
+  };
+  return map[theme] ?? ASSETS.graceMagicMissile;
+}
+
+function universalCantripImpact(theme) {
+  const map = {
+    acid: ASSETS.xinghaiAcidImpact,
+    air: ASSETS.lightOrb,
+    arcane: ASSETS.graceStars,
+    cold: ASSETS.graceFrostImpact,
+    divination: ASSETS.runeDivination,
+    earth: ASSETS.auraStoneLoop,
+    elemental: ASSETS.runeTransmutation,
+    enchantment: ASSETS.graceStars,
+    fire: ASSETS.xinghaiFireImpact,
+    force: ASSETS.xinghaiStarImpact,
+    healing: ASSETS.healingBurst,
+    illusion: ASSETS.xinghaiIllusion,
+    light: ASSETS.lightOrb,
+    lightning: ASSETS.xinghaiLightningImpact,
+    necrotic: ASSETS.runeNecromancy,
+    nature: ASSETS.poisonSplash,
+    psychic: ASSETS.xinghaiPsychicImpact,
+    radiant: ASSETS.holyLightImpact,
+    thunder: ASSETS.thunderwave,
+    transmutation: ASSETS.xinghaiWaterImpact,
+    ward: ASSETS.shieldLoopArcane,
+    water: ASSETS.xinghaiWaterImpact,
+    poison: ASSETS.poisonSplash
+  };
+  return map[theme] ?? ASSETS.graceStars;
+}
+
+function universalCantripLoop(theme) {
+  const map = {
+    acid: ASSETS.xinghaiWaterLoop,
+    air: ASSETS.lightOrbLoop,
+    arcane: ASSETS.arcaneWispLoop,
+    cold: ASSETS.graceSleepCloud,
+    divination: ASSETS.detectMagicLoop,
+    earth: ASSETS.auraStoneLoop,
+    elemental: ASSETS.runeTransmutation,
+    enchantment: ASSETS.graceStars,
+    fire: ASSETS.xinghaiFireImpact,
+    force: ASSETS.xinghaiStarLoop,
+    healing: ASSETS.healingLoop,
+    illusion: ASSETS.xinghaiIllusion,
+    light: ASSETS.lightOrbLoop,
+    lightning: ASSETS.shieldLoopArcane,
+    necrotic: ASSETS.runeNecromancy,
+    nature: ASSETS.auraStoneLoop,
+    psychic: ASSETS.xinghaiPsychicImpact,
+    radiant: ASSETS.auraRadiantLoop,
+    thunder: ASSETS.thunderwave,
+    transmutation: ASSETS.xinghaiWaterLoop,
+    ward: ASSETS.shieldLoopRadiant,
+    water: ASSETS.xinghaiWaterLoop,
+    poison: ASSETS.poisonSplash
+  };
+  return map[theme] ?? ASSETS.arcaneWispLoop;
+}
+
+function universalCantripSound(theme) {
+  const map = {
+    acid: ASSETS.sounds.acid ?? ASSETS.sounds.cast,
+    fire: ASSETS.sounds.fire ?? ASSETS.sounds.cast,
+    cold: ASSETS.sounds.frost,
+    light: ASSETS.sounds.divineCaster,
+    lightning: ASSETS.sounds.lightning ?? ASSETS.sounds.witchBolt,
+    necrotic: ASSETS.sounds.necrotic ?? ASSETS.sounds.mind,
+    poison: ASSETS.sounds.poison ?? ASSETS.sounds.acid ?? ASSETS.sounds.cast,
+    psychic: ASSETS.sounds.psychic ?? ASSETS.sounds.mind,
+    radiant: ASSETS.sounds.radiantExplosion,
+    thunder: ASSETS.sounds.thunder ?? ASSETS.sounds.chargeImpact ?? ASSETS.sounds.cast,
+    ward: ASSETS.sounds.cast,
+    water: ASSETS.sounds.cast,
+    arcane: ASSETS.sounds.cast
+  };
+  return map[theme] ?? ASSETS.sounds.cast;
+}
+
+function addUniversalCantripCast(seq, source, files, quality, theme) {
+  const castFiles = Array.isArray(files) ? files : [files];
+  seq.effect()
+    .file(firstExisting(castFiles))
+    .atLocation(source)
+    .aboveLighting()
+    .scaleToObject(quality.casterScale * 0.78, { considerTokenScale: true, uniform: true })
+    .fadeOut(320);
+
+  if (theme === "radiant" || theme === "ward" || theme === "healing") {
+    seq.effect()
+      .file(firstExisting(ASSETS.lightOrb))
+      .atLocation(source)
+      .belowTokens()
+      .scaleToObject(quality.casterScale * 0.52, { considerTokenScale: true, uniform: true })
+      .fadeOut(260)
+      .delay(80);
+  }
+}
 
 async function playProfileSignatureEffect(ctx) {
   const signature = PROFILE_SIGNATURES[ctx.profile?.id];
@@ -9057,11 +9602,63 @@ function actorAssignmentKey(actor) {
 function findEffectForItem(profile, item) {
   if (!profile || !item) return null;
   const id = item.id ?? item._id;
-  const normalizedName = normalizeText(item.name);
+  const normalizedNames = normalizedItemNames(item);
   return profile.effects.find((effect) => {
     if (id && effect.itemIds.has(id)) return true;
-    return effect.normalizedNames.has(normalizedName);
+    return effectMatchesNormalizedNames(effect, normalizedNames);
   }) ?? null;
+}
+
+function effectMatchesNormalizedNames(effect, normalizedNames = []) {
+  if (!effect || !normalizedNames.length) return false;
+  for (const normalizedName of normalizedNames) {
+    if (effect.normalizedNames.has(normalizedName)) return true;
+    if (Array.from(effect.normalizedNames ?? []).some((alias) =>
+      alias.length > 3 && normalizedName.length > 3 && (normalizedName.includes(alias) || alias.includes(normalizedName))
+    )) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function normalizedItemNames(item) {
+  return [...new Set(itemCandidateNames(item).map(normalizeText).filter(Boolean))];
+}
+
+function itemCandidateNames(item) {
+  if (!item) return [];
+  const source = item._source ?? {};
+  const values = [
+    item.name,
+    item.system?.identifier,
+    item.system?.slug,
+    item.getFlag?.("babele", "originalName"),
+    item.getFlag?.("babele", "originalPayload")?.name,
+    foundry.utils.getProperty(item, "flags.babele.originalName"),
+    foundry.utils.getProperty(item, "flags.babele.originalPayload.name"),
+    foundry.utils.getProperty(source, "flags.babele.originalName"),
+    foundry.utils.getProperty(source, "flags.babele.originalPayload.name")
+  ];
+
+  for (const activity of collectionValues(item.system?.activities)) {
+    values.push(
+      activity?.name,
+      activity?.identifier,
+      foundry.utils.getProperty(activity, "flags.babele.originalName"),
+      foundry.utils.getProperty(activity, "flags.babele.originalPayload.name")
+    );
+  }
+
+  return values.filter((value) => typeof value === "string" && value.trim());
+}
+
+function collectionValues(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  if (typeof value.values === "function") return Array.from(value.values());
+  if (typeof value === "object") return Object.values(value);
+  return [];
 }
 
 function effectUsesMeasuredTemplate(effect) {
@@ -9093,7 +9690,7 @@ function externalAnimationGuard(effect, item) {
   }
 
   const crp = crpStatus(item);
-  if (setting("respectCrpAnimations") && crp.hasAnimation && effect.crpMode !== "overlay-safe") {
+  if (setting("respectCrpAnimations") && crp.hasAnimation && !effect.ignoreCrpGuard) {
     return {
       guarded: true,
       type: "crp",
@@ -9140,6 +9737,35 @@ function effectFloatingText(effect, fallback) {
 
 function editableOverrideSettingKey() {
   return game.user?.isGM ? "effectOverrides" : "personalEffectOverrides";
+}
+
+function editableModeSettingKey() {
+  return game.user?.isGM ? "effectModeOverrides" : "personalEffectModeOverrides";
+}
+
+function itemEffectModeKey(actor, item) {
+  return actor?.uuid || actor?.id ? `${actorAssignmentKey(actor)}.${item?.id ?? item?.name ?? ""}` : String(item?.id ?? item?.name ?? "");
+}
+
+function getItemEffectMode(actor, item) {
+  if (!actor || !item) return "auto";
+  const assignments = setting("effectModeOverrides") ?? {};
+  const personal = setting("personalEffectModeOverrides") ?? {};
+  const key = itemEffectModeKey(actor, item);
+  const value = !game.user?.isGM && personal[key] ? personal[key] : assignments[key] ?? personal[key] ?? "auto";
+  return normalizeEffectMode(value);
+}
+
+async function writeItemEffectMode(actor, item, mode) {
+  if (!actor || !item) return false;
+  const key = itemEffectModeKey(actor, item);
+  const settingKey = editableModeSettingKey();
+  const overrides = cloneObject(setting(settingKey) ?? {});
+  const nextMode = normalizeEffectMode(mode);
+  if (nextMode === "auto") delete overrides[key];
+  else overrides[key] = nextMode;
+  await game.settings.set(MODULE_ID, settingKey, overrides);
+  return true;
 }
 
 function effectBlockedMessage(effect, item) {
@@ -9819,6 +10445,11 @@ function escapeHTML(value) {
 
 function escapeAttribute(value) {
   return escapeHTML(value);
+}
+
+function escapeCssIdentifier(value) {
+  if (globalThis.CSS?.escape) return CSS.escape(String(value ?? ""));
+  return String(value ?? "").replace(/["\\]/g, "\\$&");
 }
 
 function clamp(value, min, max) {

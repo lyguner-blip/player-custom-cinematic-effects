@@ -2,7 +2,7 @@
 
 为 Foundry VTT 的玩家角色提供非侵入式电影级特效叠加。模块以角色配置为核心，识别角色的物品、法术、武技和特性，在自动化结算后播放 Sequencer/JB2A 风格的演出效果。
 
-当前版本：`1.0.28`
+当前版本：`1.0.29`
 
 ## 功能概览
 
@@ -11,6 +11,8 @@
 - 自动监听 `midi-qol`、DnD5e activity 和聊天卡触发，也支持控制面板手动播放。
 - 提供场景工具栏控制面板，可切换角色、查看匹配状态、开关单项特效、改浮字。
 - 固定只播放电影级特效，支持镜头移动、镜头震动、Token 动势残影、浮字和音效设置。
+- 新增不绑定角色的通用戏法基础库，玩家可按条目在“自动/定制/通用/关闭”之间切换。
+- 角色卡会为存在电影级特效的条目标记“影:定 / 影:通 / 影:关”，方便玩家识别。
 - 可与 `player-custom-automation-effects` 联动，让规则自动化接管特定动作的触发时机。
 
 ## 已适配角色
@@ -78,11 +80,19 @@ git clone https://github.com/lyguner-blip/player-custom-cinematic-effects.git
 2. 进入场景后，从场景工具栏打开“玩家定制特效库”控制面板。
 3. 选择当前角色，查看条目匹配状态。
 4. 使用自动播放，或在面板内手动测试单个特效。
-5. 根据客户端性能调整画质、镜头震动、音效和浮字。
+5. 在条目行中按需要切换自动、定制、通用或关闭模式。
+6. 根据客户端偏好调整镜头震动、音效和浮字。
 
 ## 联动说明
 
 本模块会暴露 `game.modules.get("player-custom-cinematic-effects").api` 和 `globalThis.PlayerCustomCinematicEffects`，供自动化模块调用。自动化模块可以在规则处理完成后调用特效库播放对应动画，避免动画早于规则结算或 Token 移动。
+
+常用入口：
+
+- `playItemEffect(context)`：按 actor、item、source、targets 播放当前模式下的电影级特效。
+- `playEffectStage(context)`：供自动化 MOD 按阶段触发同一个效果，支持传入 `stage`、`damage`、`attackRoll` 等上下文。
+- `getActorEffect(actor, item)`：查看某个条目当前命中的定制/通用效果。
+- `getUniversalEffects()`：查看通用基础特效库摘要。
 
 ## 开发
 
@@ -90,6 +100,7 @@ git clone https://github.com/lyguner-blip/player-custom-cinematic-effects.git
 
 - `module.json`：Foundry 模块清单
 - `scripts/main.mjs`：主逻辑、控制面板、触发监听、特效播放
+- `scripts/universal/`：不绑定角色的通用基础特效库，目前先覆盖戏法层
 - `scripts/profiles/`：逐角色档案与条目映射
 - `styles/module.css`：控制面板样式
 - `lang/zh-CN.json`：中文设置文案
@@ -101,4 +112,5 @@ git clone https://github.com/lyguner-blip/player-custom-cinematic-effects.git
 ```bash
 node --check scripts/main.mjs
 node --check scripts/profiles/profile-utils.mjs
+node --check scripts/universal/cantrips.mjs
 ```

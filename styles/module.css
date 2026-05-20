@@ -374,6 +374,24 @@
   background: rgba(73, 123, 205, 0.12);
 }
 
+.pcce-badge.pcce-source-custom {
+  color: #ffe7a1;
+  border-color: rgba(255, 205, 96, 0.5);
+  background: rgba(188, 129, 36, 0.14);
+}
+
+.pcce-badge.pcce-source-universal {
+  color: #bff1ff;
+  border-color: rgba(89, 204, 236, 0.45);
+  background: rgba(39, 125, 160, 0.14);
+}
+
+.pcce-badge.pcce-source-off {
+  color: #d1d4dc;
+  border-color: rgba(174, 184, 205, 0.32);
+  background: rgba(124, 130, 145, 0.12);
+}
+
 .pcce-row-actions {
   grid-row: 1;
   grid-column: 2;
@@ -426,6 +444,50 @@
   border: 1px solid rgba(255, 236, 180, 0.18);
   border-radius: 5px;
   padding: 2px 6px;
+}
+
+.pcce-row-mode {
+  display: grid;
+  grid-template-columns: auto minmax(92px, 0.35fr);
+  grid-column: 1 / -1;
+  align-items: center;
+  gap: 6px;
+  color: #d6c8a8;
+  font-size: 11px;
+}
+
+.pcce-row-mode select {
+  min-width: 0;
+  height: 24px;
+  color: #fff7df;
+  background: rgba(8, 10, 13, 0.78);
+  border: 1px solid rgba(255, 236, 180, 0.18);
+  border-radius: 5px;
+}
+
+.pcce-sheet-marker {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 1px 4px;
+  color: #ffe8a6;
+  background: rgba(31, 32, 36, 0.88);
+  border: 1px solid rgba(255, 220, 132, 0.38);
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.35;
+  vertical-align: middle;
+}
+
+.pcce-sheet-universal {
+  color: #bff1ff;
+  border-color: rgba(89, 204, 236, 0.45);
+}
+
+.pcce-sheet-off {
+  color: #d4d7de;
+  border-color: rgba(174, 184, 205, 0.32);
 }
 
 .pcce-recent {
