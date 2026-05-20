@@ -8884,6 +8884,7 @@ async function playLawrenceCharge(ctx) {
       .copySprite(source)
       .atLocation(source)
       .aboveLighting()
+      .scale(tokenTextureScale(source))
       .opacity(0.42)
       .duration(moveDuration + 120)
       .fadeOut(360)
@@ -9529,11 +9530,30 @@ function addTokenAfterimage(seq, source, target, quality, options = {}) {
     .copySprite(source)
     .atLocation(source)
     .aboveLighting()
+    .scale(tokenTextureScale(source, options.scale ?? 1))
     .opacity(options.opacity ?? 0.34)
     .duration(options.duration ?? 520)
     .fadeOut(options.fadeOut ?? 420)
     .moveTowards(destination, { ease: options.ease ?? "easeOutCubic" })
     .delay(options.delay ?? 0);
+}
+
+function tokenTextureScale(token, multiplier = 1) {
+  const document = token?.document ?? token;
+  const texture = document?.texture ?? token?.texture ?? {};
+  const base = positiveNumber(multiplier, 1);
+  const scale = positiveNumber(texture.scale, 1);
+  const scaleX = positiveNumber(texture.scaleX, scale);
+  const scaleY = positiveNumber(texture.scaleY, scale);
+  return {
+    x: base * scaleX,
+    y: base * scaleY
+  };
+}
+
+function positiveNumber(value, fallback = 1) {
+  const number = Math.abs(Number(value));
+  return Number.isFinite(number) && number > 0 ? number : fallback;
 }
 
 function ensureReady(mode = "auto") {
