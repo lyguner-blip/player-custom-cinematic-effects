@@ -1,15 +1,13 @@
 import { FLORENCE_PROFILE } from "./profiles/florence.mjs";
-import {
-  AISLAN_PROFILE,
-  CALYPSO_PROFILE,
-  GRIM_PROFILE,
-  LEQUIN_PROFILE,
-  SAPPHIRE_PROFILE,
-  XINGHAI_PROFILE,
-  YINAI_PROFILE
-} from "./profiles/backlog.mjs";
+import { AISLAN_PROFILE } from "./profiles/aislan.mjs";
+import { CALYPSO_PROFILE } from "./profiles/calypso.mjs";
+import { GRIM_PROFILE } from "./profiles/grim.mjs";
 import { GRACE_PROFILE } from "./profiles/grace.mjs";
 import { LAWRENCE_PROFILE } from "./profiles/lawrence.mjs";
+import { LEQUIN_PROFILE } from "./profiles/lequin.mjs";
+import { SAPPHIRE_PROFILE } from "./profiles/sapphire.mjs";
+import { XINGHAI_PROFILE } from "./profiles/xinghai.mjs";
+import { YINAI_PROFILE } from "./profiles/yinai.mjs";
 
 const MODULE_ID = "player-custom-cinematic-effects";
 const MODULE_TITLE = "玩家定制特效库";
@@ -1331,6 +1329,7 @@ Hooks.once("ready", async () => {
   await runMigrations();
 
   for (const profile of BUILTIN_PROFILES) registerProfile(profile);
+  validateProfileIsolation(BUILTIN_PROFILES);
 
   const module = game.modules.get(MODULE_ID);
   if (module) module.api = api;
@@ -1378,6 +1377,7 @@ const api = {
   clearActorProfileAssignment,
   getActorProfile,
   getActorEffect,
+  validateProfileIsolation: () => validateProfileIsolation(BUILTIN_PROFILES),
   getProfiles: () => Array.from(preparedProfiles.values()).map(cloneProfileSummary),
   getRecentEvents: () => foundry.utils.deepClone(recentEvents)
 };
@@ -1590,10 +1590,19 @@ function registerSettings() {
   });
 }
 
-function registerProfile(profile) {
+function registerProfile(profile, options = {}) {
   if (!profile?.id) {
     console.warn(`${MODULE_TITLE} | 无法注册没有 id 的角色特效配置`, profile);
     return null;
+  }
+  if (preparedProfiles.has(profile.id) && !options.replace) {
+    const existing = preparedProfiles.get(profile.id);
+    warnProfileIsolation("角色档案 id 重复，已保留先注册的档案", {
+      profileId: profile.id,
+      existing: existing?.displayName,
+      incoming: profile.displayName
+    });
+    return existing;
   }
 
   const prepared = {
@@ -1605,6 +1614,166 @@ function registerProfile(profile) {
   preparedProfiles.set(prepared.id, prepared);
   refreshPanel({ rerender: true, preserveScroll: true });
   return prepared;
+}
+
+function validateProfileIsolation(sourceProfiles = []) {
+  const profiles = Array.from(preparedProfiles.values());
+  const report = {
+    duplicateProfileIds: duplicateProfileIds(sourceProfiles),
+    duplicateActorNames: duplicateActorNames(profiles),
+    duplicateEffectIds: duplicateEffectIds(profiles),
+    duplicateItemIds: duplicateItemIds(profiles),
+    sequenceOwnershipMismatches: sequenceOwnershipMismatches(profiles),
+    missingSequencePlayers: missingSequencePlayers(profiles)
+  };
+  emitProfileIsolationReport(report);
+  return report;
+}
+
+function duplicateProfileIds(sourceProfiles) {
+  const index = new Map();
+  for (const profile of sourceProfiles ?? []) {
+    const id = String(profile?.id ?? "").trim();
+    if (!id) continue;
+    addIndexedEntry(index, id, {
+      profileId: id,
+      displayName: profile.displayName ?? id
+    });
+  }
+  return repeatedIndexEntries(index);
+}
+
+function duplicateActorNames(profiles) {
+  const index = new Map();
+  for (const profile of profiles) {
+    for (const actorName of profile.actorNames ?? []) {
+      const normalized = normalizeText(actorName);
+      if (!normalized) continue;
+      addIndexedEntry(index, normalized, {
+        profileId: profile.id,
+        displayName: profile.displayName,
+        actorName
+      });
+    }
+  }
+  return repeatedIndexEntries(index, true);
+}
+
+function duplicateEffectIds(profiles) {
+  const duplicates = [];
+  for (const profile of profiles) {
+    const index = new Map();
+    for (const effect of profile.effects ?? []) {
+      const id = String(effect.id ?? "").trim();
+      if (!id) continue;
+      addIndexedEntry(index, id, {
+        profileId: profile.id,
+        displayName: profile.displayName,
+        effectId: id,
+        label: effect.label
+      });
+    }
+    duplicates.push(...repeatedIndexEntries(index));
+  }
+  return duplicates;
+}
+
+function duplicateItemIds(profiles) {
+  const index = new Map();
+  for (const profile of profiles) {
+    for (const effect of profile.effects ?? []) {
+      for (const itemId of effect.itemIds ?? []) {
+        const id = String(itemId ?? "").trim();
+        if (!id) continue;
+        addIndexedEntry(index, id, {
+          profileId: profile.id,
+          displayName: profile.displayName,
+          effectId: effect.id,
+          label: effect.label,
+          sequence: effect.sequence,
+          shared: isFoodOrPotionReusableEffect(effect)
+        });
+      }
+    }
+  }
+  return repeatedIndexEntries(index).filter((entry) => !entry.entries.every((item) => item.shared));
+}
+
+function sequenceOwnershipMismatches(profiles) {
+  const issues = [];
+  for (const profile of profiles) {
+    for (const effect of profile.effects ?? []) {
+      const ownerProfileId = sequenceOwnerProfileId(effect.sequence);
+      if (!ownerProfileId || ownerProfileId === profile.id || isFoodOrPotionReusableEffect(effect)) continue;
+      issues.push({
+        profileId: profile.id,
+        displayName: profile.displayName,
+        effectId: effect.id,
+        label: effect.label,
+        sequence: effect.sequence,
+        ownerProfileId
+      });
+    }
+  }
+  return issues;
+}
+
+function missingSequencePlayers(profiles) {
+  const issues = [];
+  for (const profile of profiles) {
+    for (const effect of profile.effects ?? []) {
+      if (!effect.sequence) continue;
+      if (SEQUENCE_PLAYERS[effect.sequence] || shouldUseProfileSignature(profile, effect)) continue;
+      issues.push({
+        profileId: profile.id,
+        displayName: profile.displayName,
+        effectId: effect.id,
+        label: effect.label,
+        sequence: effect.sequence
+      });
+    }
+  }
+  return issues;
+}
+
+function addIndexedEntry(index, key, entry) {
+  if (!index.has(key)) index.set(key, []);
+  index.get(key).push(entry);
+}
+
+function repeatedIndexEntries(index, acrossProfilesOnly = false) {
+  const repeated = [];
+  for (const [key, entries] of index.entries()) {
+    if (entries.length < 2) continue;
+    const profileIds = new Set(entries.map((entry) => entry.profileId).filter(Boolean));
+    if (acrossProfilesOnly && profileIds.size < 2) continue;
+    repeated.push({ key, entries });
+  }
+  return repeated;
+}
+
+function emitProfileIsolationReport(report) {
+  if (!game.user?.isGM) return;
+  const warnings = [
+    ["角色档案 id 重复", report.duplicateProfileIds],
+    ["角色匹配名称跨档案重复", report.duplicateActorNames],
+    ["同一档案内 effect id 重复", report.duplicateEffectIds],
+    ["物品 id 跨档案重复", report.duplicateItemIds],
+    ["序列前缀属于其他角色", report.sequenceOwnershipMismatches],
+    ["序列没有可用播放器", report.missingSequencePlayers]
+  ].filter(([, entries]) => entries.length);
+
+  if (!warnings.length) {
+    debugLog("角色档案隔离检查通过", { profileCount: preparedProfiles.size });
+    return;
+  }
+  for (const [message, entries] of warnings) {
+    warnProfileIsolation(message, entries);
+  }
+}
+
+function warnProfileIsolation(message, detail) {
+  console.warn(`${MODULE_TITLE} | 角色档案隔离检查 | ${message}`, detail);
 }
 
 function prepareEffect(profile, effect) {
