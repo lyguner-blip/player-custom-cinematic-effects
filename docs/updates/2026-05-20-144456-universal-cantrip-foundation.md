@@ -14,7 +14,7 @@
 - 对 `player-custom-automation-effects` 暴露 `playEffectStage(context)`，便于多段自动化按阶段触发动画。
 - 物品匹配新增 Babele 兼容：除当前名称外，也读取 `flags.babele.originalName`、`flags.babele.originalPayload.name` 和 `system.identifier`，降低汉化后无法命中特效的概率。
 - 外部动画优先级改为本库优先；存在定制或通用电影级效果时，默认关闭 AA/CRP 的动画开关，保留规则自动化。
-- 开发指令补充资源基准：`D:\fvtt\Data\modules\dnd-players-handbook` 为法术描述准绳，`D:\fvtt\Data\modules\dnd5e-animations` 只作预设参考。
+- 开发指令补充资源基准：以维护者本地安装的 `dnd-players-handbook` 为法术描述准绳，`dnd5e-animations` 只作预设参考。
 
 ## 验证方式
 

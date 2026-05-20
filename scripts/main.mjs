@@ -5254,6 +5254,44 @@ function addGrimWeapon(seq, ctx, signature, target) {
   addShake(seq, target ?? source, quality, { delay: 310, strength: Math.max(0, quality.shakeStrength - 5), duration: 210 });
 }
 
+function addGrimManyHandBurst(seq, source, target, signature, quality, options = {}) {
+  const baseDelay = Number(options.delay ?? 0);
+  const mirror = Number(options.index ?? 0) % 2 ? -1 : 1;
+  const punchFiles = signature.manyHandPunch ?? signature.fist;
+  const clawFiles = signature.manyHandClaw ?? signature.impact;
+  const hands = [
+    { x: -0.28, y: -0.16, delay: 0, scale: 0.86, opacity: 0.88 },
+    { x: 0.24, y: -0.12, delay: 8, scale: 0.82, opacity: 0.84 },
+    { x: -0.18, y: 0.2, delay: 16, scale: 0.78, opacity: 0.78 },
+    { x: 0.2, y: 0.18, delay: 24, scale: 0.74, opacity: 0.72 }
+  ];
+
+  hands.forEach((hand, handIndex) => {
+    const offset = { x: hand.x * mirror, y: hand.y };
+    const punch = seq.effect()
+      .file(pickExisting(punchFiles, (options.index ?? 0) + handIndex))
+      .atLocation(source, { offset, gridUnits: true })
+      .aboveLighting()
+      .opacity(hand.opacity)
+      .scaleToObject(quality.casterScale * hand.scale, { considerTokenScale: true, uniform: true })
+      .fadeOut(180)
+      .delay(baseDelay + hand.delay);
+    if (target && target !== source) punch.rotateTowards(target);
+
+    if (quality.extraLayers && target && target !== source) {
+      const claw = seq.effect()
+        .file(pickExisting(clawFiles, (options.index ?? 0) + handIndex))
+        .atLocation(source, { offset, gridUnits: true })
+        .aboveLighting()
+        .opacity(hand.opacity * 0.58)
+        .scaleToObject(quality.casterScale * hand.scale * 0.82, { considerTokenScale: true, uniform: true })
+        .fadeOut(150)
+        .delay(baseDelay + hand.delay + 28);
+      claw.rotateTowards(target);
+    }
+  });
+}
+
 async function playGrimManyHandsUnarmed(ctx) {
   const signature = PROFILE_SIGNATURES[GRIM_PROFILE.id];
   const seq = makeSequence();
@@ -5277,8 +5315,6 @@ async function playGrimManyHandsUnarmed(ctx) {
 
   targetList.forEach((target, index) => {
     const delay = index * Math.min(quality.stagger, 110);
-    const strikeDelays = [0, 72, 138, 204];
-    const strikeScales = [0.84, 0.8, 0.76, 0.72];
 
     if (target !== source) {
       addTokenAfterimage(seq, source, target, quality, { delay: delay + 18, fraction: 0.16, opacity: 0.32, duration: 410 });
@@ -5287,27 +5323,7 @@ async function playGrimManyHandsUnarmed(ctx) {
       }
     }
 
-    strikeDelays.forEach((swingDelay, swingIndex) => {
-      const swing = seq.effect()
-        .file(pickExisting(themedSignature.manyHandPunch ?? themedSignature.fist, index + swingIndex))
-        .atLocation(source, { randomOffset: 0.2, gridUnits: true })
-        .aboveLighting()
-        .scaleToObject(quality.casterScale * strikeScales[swingIndex], { considerTokenScale: true, uniform: true })
-        .fadeOut(170)
-        .delay(delay + swingDelay + 50);
-      if (target !== source) swing.rotateTowards(target);
-      if (target !== source) {
-        const claw = seq.effect()
-          .file(pickExisting(themedSignature.manyHandClaw ?? themedSignature.impact, index + swingIndex))
-          .atLocation(source, { randomOffset: 0.12, gridUnits: true })
-          .aboveLighting()
-          .opacity(0.6)
-          .scaleToObject(quality.casterScale * strikeScales[swingIndex] * 0.88, { considerTokenScale: true, uniform: true })
-          .fadeOut(150)
-          .delay(delay + swingDelay + 78);
-        claw.rotateTowards(target);
-      }
-    });
+    addGrimManyHandBurst(seq, source, target, themedSignature, quality, { delay: delay + 64, index });
 
     addSignatureGround(seq, target ?? source, themedSignature.abyssMark ?? themedSignature.ring, quality, {
       delay: delay + 150,

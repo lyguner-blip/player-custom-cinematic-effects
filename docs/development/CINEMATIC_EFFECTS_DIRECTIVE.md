@@ -14,8 +14,8 @@
 
 基础特效创作时，必须以规则书 MOD 提供的法术描述为准：
 
-- 规则书源路径：`D:\fvtt\Data\modules\dnd-players-handbook`
-- 参考动画源路径：`D:\fvtt\Data\modules\dnd5e-animations`
+- 规则书源：维护者本地安装的 `dnd-players-handbook` 模块。
+- 参考动画源：维护者本地安装的 `dnd5e-animations` 模块。
 
 约束如下：
 

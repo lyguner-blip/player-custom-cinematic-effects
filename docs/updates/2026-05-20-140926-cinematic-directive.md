@@ -16,7 +16,7 @@
 
 - 已运行 `node --check scripts/main.mjs`。
 - 已运行全部 `scripts/profiles/*.mjs` 语法检查。
-- 已检查仓库中无 `175.27.167.112`、`192.168.3.2`、`example.com` 残留。
+- 已检查仓库中无私人部署地址、局域网地址和占位下载地址残留。
 - 已检查代码中无 `QUALITY.light`、`QUALITY.standard`、`default: "standard"` 残留。
 
 ## 已知风险
