@@ -43,28 +43,8 @@ const SHARED_CONSUMABLE_SEQUENCES = new Set(["rationUse", "brewUse"]);
 const FOOD_OR_POTION_PATTERN = /ration|water|pint|beer|ale|wine|tea|stew|soup|pie|pumpkin|berry|goodberry|food|drink|meal|potion|口粮|水袋|品脱|啤酒|麦酒|红酒|冰茶|杂烩|汤|芝士|青蔬派|南瓜|神莓|饮食|食物|饮料|药水/u;
 
 const QUALITY = {
-  light: {
-    label: "轻量",
-    targetLimit: 2,
-    casterScale: 1.05,
-    targetScale: 0.92,
-    radiusScale: 1.75,
-    extraLayers: false,
-    stagger: 180,
-    shakeStrength: 0
-  },
-  standard: {
-    label: "标准",
-    targetLimit: 4,
-    casterScale: 1.28,
-    targetScale: 1.12,
-    radiusScale: 2.15,
-    extraLayers: true,
-    stagger: 145,
-    shakeStrength: 7
-  },
   cinematic: {
-    label: "电影",
+    label: "电影级",
     targetLimit: 6,
     casterScale: 1.55,
     targetScale: 1.32,
@@ -1441,14 +1421,12 @@ function registerSettings() {
     name: game.i18n.localize("PCCE.Settings.Quality.Name"),
     hint: game.i18n.localize("PCCE.Settings.Quality.Hint"),
     scope: "world",
-    config: true,
+    config: false,
     type: String,
     choices: {
-      light: "轻量",
-      standard: "标准",
-      cinematic: "电影"
+      cinematic: "电影级"
     },
-    default: "standard",
+    default: "cinematic",
     onChange: () => refreshPanel({ rerender: true, preserveScroll: true })
   });
 
@@ -1463,7 +1441,7 @@ function registerSettings() {
     scope: "client",
     config: false,
     type: String,
-    default: "standard"
+    default: "cinematic"
   });
 
   game.settings.register(MODULE_ID, "enableCameraPan", {
@@ -2209,9 +2187,7 @@ function renderPanel() {
   const actor = panelActor();
   const scan = scanActor(actor);
   const position = setting("panelPosition") ?? {};
-  const qualitySetting = game.user?.isGM ? "quality" : "clientQuality";
   const autoPlaySetting = game.user?.isGM ? "autoPlayEnabled" : "clientAutoPlayEnabled";
-  const qualityKey = setting(qualitySetting) ?? "standard";
   const autoPlay = setting(autoPlaySetting);
   const actorOptions = actorSelectOptions(actor?.id);
   const assignmentControl = renderAssignmentControl(actor, scan.profile);
@@ -2244,14 +2220,7 @@ function renderPanel() {
           <span>角色</span>
           <select data-setting="selectedActorId">${actorOptions}</select>
         </label>
-        <label>
-          <span>质量</span>
-          <select data-setting="${qualitySetting}">
-            ${Object.entries(QUALITY).map(([key, value]) => `
-              <option value="${key}" ${key === qualityKey ? "selected" : ""}>${value.label}</option>
-            `).join("")}
-          </select>
-        </label>
+        <span class="pcce-quality-lock" title="本模块固定只播放电影级特效">电影级</span>
         <button type="button" data-action="use-selected" title="使用当前选中 Token"><i class="fas fa-crosshairs"></i></button>
         ${macroButton}
       </div>
@@ -9633,8 +9602,7 @@ function eventKey(actor, item, activity = null) {
 }
 
 function getQualityProfile() {
-  const key = game.user?.isGM ? setting("quality") : setting("clientQuality");
-  return QUALITY[key] ?? QUALITY.standard;
+  return QUALITY.cinematic;
 }
 
 function triggerLabel(trigger) {

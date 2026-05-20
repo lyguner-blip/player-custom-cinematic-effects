@@ -2,7 +2,7 @@
 
 为 Foundry VTT 的玩家角色提供非侵入式电影级特效叠加。模块以角色配置为核心，识别角色的物品、法术、武技和特性，在自动化结算后播放 Sequencer/JB2A 风格的演出效果。
 
-当前版本：`1.0.27`
+当前版本：`1.0.28`
 
 ## 功能概览
 
@@ -10,7 +10,7 @@
 - 支持法术、武器、武技、防护、召唤、治疗、状态、光环等多种效果分类。
 - 自动监听 `midi-qol`、DnD5e activity 和聊天卡触发，也支持控制面板手动播放。
 - 提供场景工具栏控制面板，可切换角色、查看匹配状态、开关单项特效、改浮字。
-- 支持客户端画质档位、镜头移动、镜头震动、Token 动势残影、浮字和音效设置。
+- 固定只播放电影级特效，支持镜头移动、镜头震动、Token 动势残影、浮字和音效设置。
 - 可与 `player-custom-automation-effects` 联动，让规则自动化接管特定动作的触发时机。
 
 ## 已适配角色
@@ -93,6 +93,8 @@ git clone https://github.com/lyguner-blip/player-custom-cinematic-effects.git
 - `scripts/profiles/`：逐角色档案与条目映射
 - `styles/module.css`：控制面板样式
 - `lang/zh-CN.json`：中文设置文案
+- `docs/development/CINEMATIC_EFFECTS_DIRECTIVE.md`：后续电影级特效库开发指令
+- `docs/updates/`：每次更新说明，文件名带时间戳
 
 提交前可以做基础语法检查：
 

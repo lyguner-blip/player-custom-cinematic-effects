@@ -147,6 +147,18 @@
   border-radius: 5px;
 }
 
+.pcce-quality-lock {
+  height: 27px;
+  display: inline-grid;
+  place-items: center;
+  color: #fff3c1;
+  background: rgba(209, 151, 46, 0.16);
+  border: 1px solid rgba(255, 214, 128, 0.28);
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .pcce-profile-match {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
