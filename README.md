@@ -11,7 +11,6 @@
 - 自动监听 `midi-qol`、DnD5e activity 和聊天卡触发，也支持控制面板手动播放。
 - 提供场景工具栏控制面板，可切换角色、查看匹配状态、开关单项特效、改浮字。
 - 支持客户端画质档位、镜头移动、镜头震动、Token 动势残影、浮字和音效设置。
-- 默认避让 Chris Premades 和 Auto Animations 已有动画，降低重复播放的概率。
 - 可与 `player-custom-automation-effects` 联动，让规则自动化接管特定动作的触发时机。
 
 ## 已适配角色
@@ -90,7 +89,3 @@ git clone https://github.com/lyguner-blip/player-custom-cinematic-effects.git
 ```bash
 node --check scripts/main.mjs
 ```
-
-## 隐私与发布
-
-仓库中的 `manifest` 和 `download` 字段使用 GitHub 地址，不包含私人服务器 IP 或本地部署路径。
