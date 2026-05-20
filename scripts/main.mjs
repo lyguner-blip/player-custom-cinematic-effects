@@ -55,6 +55,17 @@ const EFFECT_MODE_LABELS = {
   off: "关闭"
 };
 const EFFECT_MODE_VALUES = new Set(Object.keys(EFFECT_MODE_LABELS));
+const ACTOR_SHEET_MARKER_HOOKS = [
+  "renderActorSheet",
+  "renderActorSheetV2",
+  "renderApplicationV2",
+  "renderBaseActorSheet",
+  "renderCharacterActorSheet",
+  "renderNPCActorSheet",
+  "renderVehicleActorSheet",
+  "renderGroupActorSheet"
+];
+const actorSheetMarkerTimers = new WeakMap();
 
 const QUALITY = {
   cinematic: {
@@ -1359,13 +1370,9 @@ Hooks.on("createChatMessage", (message) => {
   window.setTimeout(() => handleChatMessage(message), 120);
 });
 
-Hooks.on("renderActorSheet", (app, html) => {
-  window.setTimeout(() => addActorSheetEffectMarkers(app, html), 0);
-});
-
-Hooks.on("renderActorSheetV2", (app, html) => {
-  window.setTimeout(() => addActorSheetEffectMarkers(app, html), 0);
-});
+for (const hookName of ACTOR_SHEET_MARKER_HOOKS) {
+  Hooks.on(hookName, (app, html) => scheduleActorSheetEffectMarkers(app, html));
+}
 
 const api = {
   openPanel,
@@ -2584,9 +2591,24 @@ function addActorSheetEffectMarkers(app, html) {
     marker.className = `pcce-sheet-marker pcce-sheet-${resolution.source || resolution.mode}`;
     marker.title = actorSheetMarkerTitle(resolution);
     marker.textContent = actorSheetMarkerText(resolution);
-    const title = row.querySelector(".item-name, .name, h4, .item-title") ?? row;
+    const title = row.querySelector(".name-stacked > .title, .item-name .title, .item-title, h4, .name-stacked, .item-name, .name") ?? row;
     title.append(marker);
   }
+}
+
+function scheduleActorSheetEffectMarkers(app, html) {
+  if (!isActorSheetApplication(app)) return;
+  const current = actorSheetMarkerTimers.get(app);
+  if (current) window.clearTimeout(current);
+  actorSheetMarkerTimers.set(app, window.setTimeout(() => {
+    actorSheetMarkerTimers.delete(app);
+    addActorSheetEffectMarkers(app, html);
+  }, 0));
+}
+
+function isActorSheetApplication(app) {
+  const actor = app?.actor ?? app?.document ?? app?.object;
+  return actor?.documentName === "Actor" && actor?.items;
 }
 
 function actorSheetMarkerText(resolution) {

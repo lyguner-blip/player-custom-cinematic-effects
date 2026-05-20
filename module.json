@@ -2,7 +2,7 @@
   "id": "player-custom-cinematic-effects",
   "title": "玩家定制特效库",
   "description": "为玩家角色定制非侵入式电影级 Sequencer/JB2A 叠加特效，并提供玩家与 DM 共用的控制面板。",
-  "version": "1.0.29",
+  "version": "1.0.30",
   "type": "module",
   "authors": [
     {

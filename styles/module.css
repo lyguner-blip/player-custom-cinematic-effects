@@ -468,6 +468,7 @@
 .pcce-sheet-marker {
   display: inline-flex;
   align-items: center;
+  flex: 0 0 auto;
   margin-left: 6px;
   padding: 1px 4px;
   color: #ffe8a6;
@@ -478,6 +479,13 @@
   font-weight: 700;
   line-height: 1.35;
   vertical-align: middle;
+  white-space: nowrap;
+}
+
+.dnd5e2 .items-section .item .item-name .title > .pcce-sheet-marker,
+.dnd5e2 .name-stacked .title > .pcce-sheet-marker {
+  position: relative;
+  top: -1px;
 }
 
 .pcce-sheet-universal {
